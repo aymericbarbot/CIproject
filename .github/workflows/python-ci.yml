@@ -1,19 +1,21 @@
-name: CI Workflow #test
+name: CI Workflow
 
 on:
   push:
-    branches:
-      - dev
+    branches: [dev]
+
+permissions:
+  contents: write          # le token peut pousser
 
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
@@ -23,49 +25,75 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run tests
-        run: |
-          pytest
+        run: pytest
 
-  handle-success-or-failure:
+
+  promote-to-main:
     needs: build-and-test
+    if: ${{ always() && needs.build-and-test.result == 'success' }}
     runs-on: ubuntu-latest
-    if: always()
+
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 
-      
-      - name: Set up Git
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
+          fetch-depth: 0      # historique complet
 
-      - name: Handle success
-        if: success()
+      - name: Configure Git
         run: |
+          git config --global user.name  "github-actions"
+          git config --global user.email "github-actions@github.com"
+
+      - name: Fast-forward main if possible
+        run: |
+          set -e
+
+          # 1. Récupère l’état le plus récent du dépôt
           git fetch origin
-          git rebase origin/main
+
+          # 2. Met localement main à jour (fast-forward) depuis le remote
           git checkout main
-          git merge --ff-only origin/dev
-          git push https://x-access-token:${{ secrets.PAT_COURCI }}@github.com/LouisBrousse/courCI.git main
+          git reset --hard origin/main
 
-      - name: Handle failure – reset and branch off
-        if: failure()
+          # 3. Tente le fast-forward depuis dev
+          if git merge --ff-only origin/dev ; then
+            # 4. Push (toujours fast-forward) vers le remote
+            git push \
+              https://x-access-token:${{ secrets.PAT_COURCI }}@github.com/LouisBrousse/courCI.git \
+              HEAD:main
+          else
+            echo "::error title=Fast-forward impossible::La branche dev n'est pas en avance sur main."
+            echo "Ajoute les commits manquants dans dev puis relance la CI."
+            exit 1
+          fi
+
+
+  handle-failure:
+    needs: build-and-test
+    # toujours évalué ; n’exécute le job que si build-and-test est en échec
+    if: ${{ always() && needs.build-and-test.result == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Configure Git
         run: |
-          git fetch origin
-          git checkout dev
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
+      - name: Branch off failing commit and reset dev
+        run: |
+          FAILED_SHA=${{ github.sha }}
           TIMESTAMP=$(date +%s)
+          FAILURE_BRANCH="failures/$TIMESTAMP"
 
-          # Sauvegarder le commit fautif
-          BAD_COMMIT=$(git rev-parse origin/dev)
+          # 1. crée la branche d’erreur
+          git checkout -b "$FAILURE_BRANCH" "$FAILED_SHA"
+          git push \
+            https://x-access-token:${{ secrets.PAT_COURCI }}@github.com/LouisBrousse/courCI.git \
+            "$FAILURE_BRANCH"
 
-          # Revenir à l'avant-dernier commit (1 commit avant le dernier sur dev)
-          git reset --hard HEAD~1
-
-          # Pousser la correction sur dev
-          git push https://x-access-token:${{ secrets.PAT_COURCI }}@github.com/LouisBrousse/courCI.git dev --force
-
-          # Créer une branche pour le commit fautif
-          git checkout -b failures/$TIMESTAMP $BAD_COMMIT
-          git push https://x-access-token:${{ secrets.PAT_COURCI }}@github.com/LouisBrousse/courCI.git failures/$TIMESTAMP
+          # 2. remet dev à l’état précédent le push
+          PREVIOUS_SHA=${{ github.event.before }}
+          git push --force \
+            https://x-access-token:${{ secrets.PAT_COURCI }}@github.com/LouisBrousse/courCI.git \
+            "$PREVIOUS_SHA":refs/heads/dev
