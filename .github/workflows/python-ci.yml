@@ -4,23 +4,26 @@ on:
   push:
     branches: [dev]
 
-# Le token doit pouvoir pousser dans le dépôt
+# Autorise le token automatique à écrire dans le dépôt
 permissions:
-  contents: write           # GitHub Actions peut écrire (push)
+  contents: write
 
 jobs:
+  # ---------------------------------------------------
+  # 1. Compilation & tests
+  # ---------------------------------------------------
   build-and-test:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0     # on aura besoin de l’historique complet plus tard
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.x"
 
       - name: Install dependencies
         run: |
@@ -30,7 +33,10 @@ jobs:
       - name: Run tests
         run: pytest
 
-  promote-to-main:          # → s’exécute UNIQUEMENT si les tests sont verts
+  # ---------------------------------------------------
+  # 2. Promotion dev ➜ main (uniquement si les tests passent)
+  # ---------------------------------------------------
+  promote-to-main:
     needs: build-and-test
     if: ${{ needs.build-and-test.result == 'success' }}
     runs-on: ubuntu-latest
@@ -41,17 +47,20 @@ jobs:
 
       - name: Configure Git
         run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "github-actions@github.com"
+          git config --global user.name  "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Fast-forward main
+      - name: Fast-forward main depuis dev
         run: |
-          # pousse le SHA de dev sur main (fast-forward)
-          git push \
-            https://x-access-token:${{ secrets.PAT_COURCI }}@github.com/LouisBrousse/courCI.git \
-            refs/heads/dev:refs/heads/main
+          git fetch origin dev            # assure d'avoir la branche à jour
+          git checkout main
+          git merge --ff-only origin/dev  # fast-forward simple
+          git push origin main            # push via GITHUB_TOKEN
 
-  handle-failure:           # → s’exécute UNIQUEMENT si les tests sont rouges
+  # ---------------------------------------------------
+  # 3. Gestion d'échec : isolement du commit fautif & reset dev
+  # ---------------------------------------------------
+  handle-failure:
     needs: build-and-test
     if: ${{ needs.build-and-test.result == 'failure' }}
     runs-on: ubuntu-latest
@@ -62,8 +71,8 @@ jobs:
 
       - name: Configure Git
         run: |
-          git config --global user.name "github-actions"
-          git config --global user.email "github-actions@github.com"
+          git config --global user.name  "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
       - name: Branch off failing commit and reset dev
         run: |
@@ -73,12 +82,8 @@ jobs:
 
           # 1. crée la branche d’erreur sur le commit fautif
           git checkout -b "$FAILURE_BRANCH" "$FAILED_SHA"
-          git push \
-            https://x-access-token:${{ secrets.PAT_COURCI }}@github.com/LouisBrousse/courCI.git \
-            "$FAILURE_BRANCH"
+          git push origin "$FAILURE_BRANCH"
 
           # 2. remet dev à l’état précédent le push (avant le commit fautif)
           PREVIOUS_SHA=${{ github.event.before }}
-          git push --force \
-            https://x-access-token:${{ secrets.PAT_COURCI }}@github.com/LouisBrousse/courCI.git \
-            "$PREVIOUS_SHA":refs/heads/dev
+          git push --force origin "$PREVIOUS_SHA":refs/heads/dev
