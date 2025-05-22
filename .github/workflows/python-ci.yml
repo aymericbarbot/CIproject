@@ -4,18 +4,18 @@ on:
   push:
     branches: [dev]
 
-# Autorise le token automatique à écrire dans le dépôt
+# Autorise le token GITHUB_TOKEN à écrire
 permissions:
   contents: write
 
 jobs:
-  # ---------------------------------------------------
-  # 1. Compilation & tests
-  # ---------------------------------------------------
+  # ===================================================
+  # 1. Build & tests
+  # ===================================================
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -28,14 +28,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
       - name: Run tests
         run: pytest
 
-  # ---------------------------------------------------
-  # 2. Promotion dev ➜ main (uniquement si les tests passent)
-  # ---------------------------------------------------
+  # ===================================================
+  # 2. Fast‑forward main si les tests réussissent
+  # ===================================================
   promote-to-main:
     needs: build-and-test
     if: ${{ needs.build-and-test.result == 'success' }}
@@ -52,17 +52,18 @@ jobs:
 
       - name: Fast-forward main depuis dev
         run: |
-          git fetch origin dev            # assure d'avoir la branche à jour
+          git fetch origin dev
           git checkout main
-          git merge --ff-only origin/dev  # fast-forward simple
-          git push origin main            # push via GITHUB_TOKEN
+          git merge --ff-only origin/dev
+          git push origin main
 
-  # ---------------------------------------------------
-  # 3. Gestion d'échec : isolement du commit fautif & reset dev
-  # ---------------------------------------------------
+  # ===================================================
+  # 3. Branch "failures/…" & reset dev si les tests échouent
+  # ===================================================
   handle-failure:
     needs: build-and-test
-    if: ${{ needs.build-and-test.result == 'failure' }}
+    # failure() → ce job s'exécute uniquement si *au moins* un job précédent a échoué
+    if: ${{ failure() }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,16 +75,18 @@ jobs:
           git config --global user.name  "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Branch off failing commit and reset dev
+      - name: Branch off failing commit & reset dev
+        env:
+          FAILED_SHA: ${{ github.sha }}
+          PREVIOUS_SHA: ${{ github.event.before }}
         run: |
-          FAILED_SHA=${{ github.sha }}            # commit qui vient d’échouer
           TIMESTAMP=$(date +%s)
           FAILURE_BRANCH="failures/$TIMESTAMP"
 
-          # 1. crée la branche d’erreur sur le commit fautif
+          # 1. Sauvegarder le commit fautif
+          git fetch origin
           git checkout -b "$FAILURE_BRANCH" "$FAILED_SHA"
           git push origin "$FAILURE_BRANCH"
 
-          # 2. remet dev à l’état précédent le push (avant le commit fautif)
-          PREVIOUS_SHA=${{ github.event.before }}
+          # 2. Réinitialiser la branche dev à l'état précédent le push
           git push --force origin "$PREVIOUS_SHA":refs/heads/dev
