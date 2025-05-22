@@ -1,0 +1,5 @@
+0000000000000000000000000000000000000000 4af0a6930de7658f9de8def064b281577dc0f0bc aymericbarbot <aymeric.barbot@neusta.fr> 1747902855 +0200	clone: from https://github.com/LouisBrousse/courCI.git
+4af0a6930de7658f9de8def064b281577dc0f0bc 55db287b7014a37adb7c937e6ec3c53e11e6f33e aymericbarbot <aymeric.barbot@neusta.fr> 1747902899 +0200	checkout: moving from main to dev
+55db287b7014a37adb7c937e6ec3c53e11e6f33e 4af0a6930de7658f9de8def064b281577dc0f0bc aymericbarbot <aymeric.barbot@neusta.fr> 1747902930 +0200	checkout: moving from dev to main
+4af0a6930de7658f9de8def064b281577dc0f0bc 55db287b7014a37adb7c937e6ec3c53e11e6f33e aymericbarbot <aymeric.barbot@neusta.fr> 1747902942 +0200	checkout: moving from main to dev
+55db287b7014a37adb7c937e6ec3c53e11e6f33e 082294c4bc3eb972f30596e5d2d7883d44d3192b aymericbarbot <aymeric.barbot@neusta.fr> 1747902988 +0200	commit: ci test green after rebase
