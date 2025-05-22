@@ -1,61 +1,84 @@
-name: CI-dev
+name: CI Workflow
 
 on:
   push:
-    branches:
-      - dev                     # déclenché seulement sur la branche dev
+    branches: [dev]
 
-# le jeton GITHUB_TOKEN doit pouvoir écrire dans le dépôt
+# Le token doit pouvoir pousser dans le dépôt
 permissions:
-  contents: write
+  contents: write           # GitHub Actions peut écrire (push)
 
 jobs:
-  test-and-integrate:
+  build-and-test:
     runs-on: ubuntu-latest
     steps:
-      # 1. Récupération complète de l’historique (important pour remettre dev en arrière)
-      - name: Checkout (history = 0)
+      - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # on aura besoin de l’historique complet plus tard
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest
+
+  promote-to-main:          # → s’exécute UNIQUEMENT si les tests sont verts
+    needs: build-and-test
+    if: ${{ needs.build-and-test.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # 2. Préparation de l’environnement (exemple Node – à adapter)
-      #    supprime ou remplace ce bloc si tu utilises Maven, Gradle, pytest, etc.
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
 
-      - name: Install deps
-        run: npm ci            # adapte ici
-
-      # 3. Exécution des tests
-      - name: Run tests
-        id: tests
-        run: npm test          # adapte ici
-
-      # 4. Succès : fast-forward de main
       - name: Fast-forward main
-        if: success()          # ne s’exécute que si les tests sont verts
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          # pousse le SHA de dev sur main (fast-forward)
+          git push \
+            https://x-access-token:${{ secrets.PAT_COURCI }}@github.com/LouisBrousse/courCI.git \
+            refs/heads/dev:refs/heads/main
 
-          # on pousse le SHA courant en main (fast-forward uniquement)
-          git push --ff-only origin HEAD:main
+  handle-failure:           # → s’exécute UNIQUEMENT si les tests sont rouges
+    needs: build-and-test
+    if: ${{ needs.build-and-test.result == 'failure' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      # 5. Échec : branche failures/<timestamp> + reset de dev
-      - name: Handle failure
-        if: failure()          # ne s’exécute que si les tests sont rouges
+      - name: Configure Git
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions@users.noreply.github.com"
+          git config --global user.name "github-actions"
+          git config --global user.email "github-actions@github.com"
 
-          # branche d’erreur unique
-          FAILURE_BRANCH="failures/$(date +%s)"
-          git branch "$FAILURE_BRANCH" "$GITHUB_SHA"
-          git push origin "$FAILURE_BRANCH"
+      - name: Branch off failing commit and reset dev
+        run: |
+          FAILED_SHA=${{ github.sha }}            # commit qui vient d’échouer
+          TIMESTAMP=$(date +%s)
+          FAILURE_BRANCH="failures/$TIMESTAMP"
 
-          # remise de dev à l’état précédent le push
-          PREVIOUS_SHA="${{ github.event.before }}"
-          git push --force-with-lease origin "$PREVIOUS_SHA":dev
+          # 1. crée la branche d’erreur sur le commit fautif
+          git checkout -b "$FAILURE_BRANCH" "$FAILED_SHA"
+          git push \
+            https://x-access-token:${{ secrets.PAT_COURCI }}@github.com/LouisBrousse/courCI.git \
+            "$FAILURE_BRANCH"
+
+          # 2. remet dev à l’état précédent le push (avant le commit fautif)
+          PREVIOUS_SHA=${{ github.event.before }}
+          git push --force \
+            https://x-access-token:${{ secrets.PAT_COURCI }}@github.com/LouisBrousse/courCI.git \
+            "$PREVIOUS_SHA":refs/heads/dev
